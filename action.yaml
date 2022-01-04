@@ -30,11 +30,21 @@ inputs:
       go coverage file for the code before changes.
       When not provided, previous coverage information will not be displayed.
     required: false
+  github_token:
+    description: 'The GitHub access token (e.g. secrets.GITHUB_TOKEN) used to create or update the comment. This defaults to {{ github.token }}.'
+    default: '${{ github.token }}'
+    required: false
 runs:
   using: "composite"
   steps:
-    - run: |
-        go install "https://github.com/seriousben/go-patch-cover/cmd/go-patch-cover@${version}"
+    - if: github.event_name == 'pull_request'
+      run: |
+        git fetch --no-tags --prune --progress --no-recurse-submodules --depth=1 origin ${GITHUB_BASE_REF}
+        git diff -U0 --no-color origin/${GITHUB_BASE_REF} > patch.diff
+      shell: bash
+    - if: github.event_name == 'pull_request'
+      run: |
+        go install "github.com/seriousben/go-patch-cover/cmd/go-patch-cover@${version}"
         if [ -z "${previous_coverage_filename}" ]; then
           $(go env GOPATH)/bin/go-patch-cover ${coverage_filename} ${diff_filename}
         else
@@ -46,4 +56,5 @@ runs:
         coverage_filename : ${{ inputs.coverage_filename }}
         diff_filename : ${{ inputs.diff_filename }}
         previous_coverage_filename : ${{ inputs.previous_coverage_filename }}
+        github_token: ${{ inputs.github_token }}
 
