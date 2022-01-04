@@ -1,0 +1,49 @@
+name: "Go Patch Coverage"
+description: "Display golang patch test coverage on your pull requests"
+author: "Benjamin Boudreau"
+branding:
+  icon: "code"
+  color: "orange"
+inputs:
+  version:
+    description: |
+      The version of go-patch-cover to use.
+    required: true
+    default: "latest"
+  coverage_filename:
+    description: |
+      go coverage file for the code after change.
+      Can be generated with any cover mode.
+      Example generation:
+        go test -coverprofile=coverage.out -covermode=count ./...
+    required: true
+    default: "coverage.out"
+  diff_filename:
+    description: |
+      Unified diff file of the patch to compute coverage for.
+      Example generation:
+        git diff -U0 --no-color origin/main > patch.diff
+    required: true
+    default: "patch.diff"
+  previous_coverage_filename:
+    description: |
+      go coverage file for the code before changes.
+      When not provided, previous coverage information will not be displayed.
+    required: false
+runs:
+  using: "composite"
+  steps:
+    - run: |
+        go install "https://github.com/seriousben/go-patch-cover/cmd/go-patch-cover@${version}"
+        if [ -z "${previous_coverage_filename}" ]; then
+          $(go env GOPATH)/bin/go-patch-cover ${coverage_filename} ${diff_filename}
+        else
+          $(go env GOPATH)/bin/go-patch-cover ${coverage_filename} ${diff_filename} ${previous_coverage_filename}
+        fi
+      shell: bash
+      env:
+        version: ${{ inputs.version }}
+        coverage_filename : ${{ inputs.coverage_filename }}
+        diff_filename : ${{ inputs.diff_filename }}
+        previous_coverage_filename : ${{ inputs.previous_coverage_filename }}
+
