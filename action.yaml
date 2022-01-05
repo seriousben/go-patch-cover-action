@@ -1,5 +1,10 @@
 name: "Go Patch Coverage"
-description: "Display golang patch test coverage on your pull requests"
+description: |
+  Display golang patch test coverage on your pull requests.
+
+  Required permissions:
+    - `pull-requests: write` for writing comments on pull requests.
+    - `contents: write` for the git-notes prev_coverage_mode to maintain the coverage within git notes.
 author: "Benjamin Boudreau"
 branding:
   icon: "code"
@@ -9,7 +14,7 @@ inputs:
     description: |
       The version of go-patch-cover to use.
     required: true
-    default: "latest"
+    default: "0.2.0"
   coverage_filename:
     description: |
       go coverage file for the code after change.
@@ -23,33 +28,61 @@ inputs:
       Unified diff file of the patch to compute coverage for.
       Example generation:
         git diff -U0 --no-color origin/main > patch.diff
-    required: true
+    required: false
     default: "patch.diff"
   previous_coverage_filename:
     description: |
       go coverage file for the code before changes.
       When not provided, previous coverage information will not be displayed.
+    default: 'prev_coverage.out'
+    required: false
+  diff_enabled:
+    description: |
+      Controls whether go-patch-cover action should create the diff file or not.
+    default: 'true'
+    required: true
+  prev_coverage_mode:
+    description: |
+      The GitHub access token (e.g. secrets.GITHUB_TOKEN) used to create or update the comment. This defaults to {{ github.token }}.
+
+      Modes:
+      - git-notes: Use git notes: `refs/notes/coverage` to persist the coverage file on pushes.
+      - file: Expect the file pointed to by the previous_coverage_filename input to already exist.
+    default: 'git-notes'
     required: false
   github_token:
-    description: 'The GitHub access token (e.g. secrets.GITHUB_TOKEN) used to create or update the comment. This defaults to {{ github.token }}.'
+    description: |
+      The GitHub access token (e.g. secrets.GITHUB_TOKEN) used to create or update the comment. This defaults to {{ github.token }}.
     default: '${{ github.token }}'
     required: false
 runs:
   using: "composite"
   steps:
-    - if: github.event_name == 'pull_request'
+    - if: github.event_name == 'pull_request' && inputs.diff_enabled == 'true'
       run: |
         git fetch --no-tags --prune --progress --no-recurse-submodules --depth=1 origin ${GITHUB_BASE_REF}
         git diff -U0 --no-color origin/${GITHUB_BASE_REF} > patch.diff
       shell: bash
+    - if: github.event_name == 'pull_request' && inputs.prev_coverage_mode == 'git-notes'
+      run: |
+        git fetch --no-tags --prune --progress --no-recurse-submodules --depth=1 origin ${GITHUB_BASE_REF} +refs/notes/coverage:refs/notes/coverage || true
+        git notes --ref coverage show origin/${GITHUB_BASE_REF} > ${previous_coverage_filename} || rm ${previous_coverage_filename}
+      shell: bash
+      env:
+        previous_coverage_filename : ${{ inputs.previous_coverage_filename }}
     - if: github.event_name == 'pull_request'
       run: |
         go install "github.com/seriousben/go-patch-cover/cmd/go-patch-cover@${version}"
-        if [ -z "${previous_coverage_filename}" ]; then
-          $(go env GOPATH)/bin/go-patch-cover ${coverage_filename} ${diff_filename}
+        if [ -f "${previous_coverage_filename}" ]; then
+          out="$($(go env GOPATH)/bin/go-patch-cover ${coverage_filename} ${diff_filename} ${previous_coverage_filename})"
         else
-          $(go env GOPATH)/bin/go-patch-cover ${coverage_filename} ${diff_filename} ${previous_coverage_filename}
+          out="$($(go env GOPATH)/bin/go-patch-cover ${coverage_filename} ${diff_filename})"
         fi
+
+        # Creating here doc to keep newline intact.
+        echo "GO_PATCH_COVER_OUT<<EOF" >> $GITHUB_ENV
+        echo "$out" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
       shell: bash
       env:
         version: ${{ inputs.version }}
@@ -57,4 +90,63 @@ runs:
         diff_filename : ${{ inputs.diff_filename }}
         previous_coverage_filename : ${{ inputs.previous_coverage_filename }}
         github_token: ${{ inputs.github_token }}
+    - if: github.event_name == 'pull_request'
+      run: |
+        comment_body=$(cat <<EOF
+        <!-- go-patch-cover/report -->
+        $GO_PATCH_COVER_OUT
+        EOF
+        )
 
+        comments="$(gh api graphql -F subjectId=$PULL_REQUEST_NODE_ID -f query='
+          query($subjectId: ID!) {
+            node(id: $subjectId) {
+              ... on PullRequest {
+                comments(first: 100) {
+                  nodes {
+                    id
+                    isMinimized
+                    body
+                  }
+                }
+              }
+            }
+          }
+        ' --jq '.data.node.comments.nodes | map(select((.body | contains("<!-- go-patch-cover/report -->")) and .isMinimized == false)) | map(.id)[]')"
+
+        if [[ -n "$comments" ]]; then
+          for val in $comments; do
+            gh api graphql -X POST -F id=$val -F body="$comment_body" -f query='
+              mutation UpdateComment($id: ID!, $body: String!) {
+                updateIssueComment(input: {id: $id, body: $body}) {
+                  clientMutationId
+                }
+              }
+            '
+          done
+        else
+          gh api graphql -X POST -F subjectId=$PULL_REQUEST_NODE_ID -F body="$comment_body" -f query='
+            mutation AddComment($subjectId: String!, $body: String!) {
+              addComment(input: {subjectId: $subjectId, body: $body}) {
+                clientMutationId
+              }
+            }
+          '
+        fi
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.event.repository.name }}
+        PULL_REQUEST_NODE_ID: ${{ github.event.pull_request.node_id }}
+    - name: Save Coverage
+      if: github.event_name == 'push' && inputs.prev_coverage_mode == 'git-notes'
+      run: |
+        git fetch --no-tags --prune --progress --no-recurse-submodules --depth=1 origin ${GITHUB_BASE_REF} +refs/notes/coverage:refs/notes/coverage || true
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git notes --ref coverage add -f -F ${coverage_filename} origin/${GITHUB_REF_NAME}
+        git push origin refs/notes/coverage
+      shell: bash
+      env:
+        coverage_filename : ${{ inputs.coverage_filename }}
