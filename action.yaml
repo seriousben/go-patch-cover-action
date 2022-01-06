@@ -1,10 +1,6 @@
 name: "Go Patch Coverage"
 description: |
   Display golang patch test coverage on your pull requests.
-
-  Required permissions:
-    - `pull-requests: write` for writing comments on pull requests.
-    - `contents: write` for the git-notes prev_coverage_mode to maintain the coverage within git notes.
 author: "Benjamin Boudreau"
 branding:
   icon: "code"
