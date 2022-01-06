@@ -43,3 +43,6 @@ jobs:
 Please see [GitHub's documentation on Actions](https://docs.github.com/en/actions) for extensive
 documentation on how to write and tweak workflows.
 
+## Thanks
+
+This project took inspiration from https://github.com/marocchino/sticky-pull-request-comment and from https://github.com/dominikh/staticcheck-action.
