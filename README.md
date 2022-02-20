@@ -35,7 +35,7 @@ jobs:
       with:
         go-version: "*"
     - run: "go test -coverprofile=coverage.out -covermode=count ./..."
-    - uses: seriousben/go-patch-cover-action@v1.0.0
+    - uses: seriousben/go-patch-cover-action@v1
       with:
         version: main
 ```
