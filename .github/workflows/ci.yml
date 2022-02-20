@@ -1,0 +1,27 @@
+name: "CI"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  checks:
+    name: "Checks"
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: WillAbides/setup-go-faster@v1.7.0
+      with:
+        go-version: "*"
+    - name: Patch Coverage
+      uses: ./
+      with:
+        version: main
+        coverage_filename: testdata/coverage.out
+        diff_filename: testdata/diff.diff
