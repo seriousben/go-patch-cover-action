@@ -1,0 +1,535 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 8b63435..6328136 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -22,0 +23,2 @@ jobs:
++      with:
++        fetch-depth: 0
+@@ -26 +28 @@ jobs:
+-    - run: "go test ./..."
++    - run: "go test -coverprofile=coverage.out -covermode=count ./..."
+@@ -37,0 +40,6 @@ jobs:
++    - name: Report Coverage
++      run: |
++        git diff -U0 --no-color origin/main > diff.diff
++        cat diff.diff
++        cat coverage.out
++        go run cmd/main.go
+@@ -48 +55,0 @@ jobs:
+-    prout
+@@ -60 +67 @@ jobs:
+-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+\ No newline at end of file
++        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+diff --git a/.goreleaser.yaml b/.goreleaser.yaml
+new file mode 100644
+index 0000000..fb65fda
+--- /dev/null
++++ b/.goreleaser.yaml
+@@ -0,0 +1,11 @@
++builds:
++  - main: ./cmd
++    id: "cli"
++    binary: go-patch-cover
++    goos:
++      - linux
++      - darwin
++      - windows
++    env:
++      - CGO_ENABLED=0
++
+diff --git a/cmd/main.go b/cmd/main.go
+new file mode 100644
+index 0000000..374ea58
+--- /dev/null
++++ b/cmd/main.go
+@@ -0,0 +1,18 @@
++package main
++
++import (
++	"fmt"
++	"log"
++
++	patchcover "github.com/seriousben/go-patch-cover"
++)
++
++func main() {
++	coverage, err := patchcover.ProcessFiles("diff.diff", "coverage.out")
++	if err != nil {
++		log.Fatal(err)
++	}
++
++	fmt.Printf("coverage: %.1f%% of statements\n", coverage.Coverage)
++	fmt.Printf("patch coverage: %.1f%% of changed statements\n", coverage.PatchCoverage)
++}
+diff --git a/main.go b/cover.go
+similarity index 54%
+rename from main.go
+rename to cover.go
+index 9a53c79..9251966 100644
+--- a/main.go
++++ b/cover.go
+@@ -1 +1 @@
+-package main
++package patchcover
+@@ -4,2 +3,0 @@ import (
+-	"fmt"
+-	"log"
+@@ -13,2 +11,2 @@ import (
+-func main() {
+-	patch, err := os.Open("testdata/scenarios/new_file/diff.diff")
++func ProcessFiles(diffFile, coverageFile string) (CoverageData, error) {
++	patch, err := os.Open(diffFile)
+@@ -16 +14 @@ func main() {
+-		log.Fatal(err)
++		return CoverageData{}, err
+@@ -23 +21 @@ func main() {
+-		log.Fatal(err)
++		return CoverageData{}, err
+@@ -26 +24 @@ func main() {
+-	profiles, err := cover.ParseProfiles("testdata/scenarios/new_file/coverage.out")
++	profiles, err := cover.ParseProfiles(coverageFile)
+@@ -28 +26 @@ func main() {
+-		log.Fatal(err)
++		return CoverageData{}, err
+@@ -31,6 +29,11 @@ func main() {
+-	var (
+-		numStmt         int
+-		coverCount      int
+-		patchNumStmt    int
+-		patchCoverCount int
+-	)
++	return computeCoverage(files, profiles)
++}
++
++type CoverageData struct {
++	NumStmt         int
++	CoverCount      int
++	Coverage        float64
++	PatchNumStmt    int
++	PatchCoverCount int
++	PatchCoverage   float64
++}
+@@ -37,0 +41,2 @@ func main() {
++func computeCoverage(diffFiles []*gitdiff.File, coverProfiles []*cover.Profile) (CoverageData, error) {
++	var data CoverageData
+@@ -39,2 +44,2 @@ func main() {
+-	for _, p := range profiles {
+-		for _, f := range files {
++	for _, p := range coverProfiles {
++		for _, f := range diffFiles {
+@@ -50 +55 @@ func main() {
+-				patchNumStmt += b.NumStmt
++				data.PatchNumStmt += b.NumStmt
+@@ -62 +67,3 @@ func main() {
+-							patchCoverCount += b.NumStmt * b.Count
++							if b.Count > 0 {
++								data.PatchCoverCount += b.NumStmt
++							}
+@@ -72 +79 @@ func main() {
+-	for _, p := range profiles {
++	for _, p := range coverProfiles {
+@@ -74,2 +81,4 @@ func main() {
+-			numStmt += b.NumStmt
+-			coverCount += b.NumStmt * b.Count
++			data.NumStmt += b.NumStmt
++			if b.Count > 0 {
++				data.CoverCount += b.NumStmt
++			}
+@@ -81,4 +90,2 @@ func main() {
+-	if numStmt != 0 {
+-		fmt.Printf("coverage: %.1f%% of statements\n", float64(coverCount)/float64(numStmt)*100)
+-	} else {
+-		fmt.Printf("coverage: %d%% of statements\n", 0)
++	if data.NumStmt != 0 {
++		data.Coverage = float64(data.CoverCount) / float64(data.NumStmt) * 100
+@@ -86,4 +93,2 @@ func main() {
+-	if patchNumStmt != 0 {
+-		fmt.Printf("patch coverage: %.1f%% of changed statements\n", float64(patchCoverCount)/float64(patchNumStmt)*100)
+-	} else {
+-		fmt.Printf("patch coverage: %d%% of changed statements\n", 0)
++	if data.PatchNumStmt != 0 {
++		data.PatchCoverage = float64(data.PatchCoverCount) / float64(data.PatchNumStmt) * 100
+@@ -90,0 +96,2 @@ func main() {
++
++	return data, nil
+diff --git a/cover_test.go b/cover_test.go
+new file mode 100644
+index 0000000..182481c
+--- /dev/null
++++ b/cover_test.go
+@@ -0,0 +1,35 @@
++package patchcover
++
++import (
++	"encoding/json"
++	"os"
++	"path"
++	"testing"
++
++	"gotest.tools/v3/assert"
++	"gotest.tools/v3/golden"
++)
++
++func TestProcessFiles(t *testing.T) {
++	scenarioDir := "./testdata/scenarios"
++	fis, err := os.ReadDir(scenarioDir)
++	assert.NilError(t, err)
++
++	assert.Assert(t, len(fis) > 0) // Some scenarios exist.
++
++	for _, fi := range fis {
++		if !fi.IsDir() {
++			t.FailNow() // only directories allowed.
++		}
++
++		t.Run(fi.Name(), func(t *testing.T) {
++			cov, err := ProcessFiles(path.Join(scenarioDir, fi.Name(), "diff.diff"), path.Join(scenarioDir, fi.Name(), "coverage.out"))
++			assert.NilError(t, err)
++
++			covJSON, err := json.MarshalIndent(cov, "", "  ")
++			assert.NilError(t, err)
++
++			golden.Assert(t, string(covJSON), path.Join("scenarios", fi.Name(), "golden.json"))
++		})
++	}
++}
+diff --git a/go.mod b/go.mod
+index fb77b18..9548b12 100644
+--- a/go.mod
++++ b/go.mod
+@@ -6,2 +6,8 @@ require (
+-	github.com/bluekeyes/go-gitdiff v0.6.0 // indirect
+-	golang.org/x/tools v0.1.8 // indirect
++	github.com/bluekeyes/go-gitdiff v0.6.0
++	golang.org/x/tools v0.1.8
++	gotest.tools/v3 v3.0.3
++)
++
++require (
++	github.com/google/go-cmp v0.5.6 // indirect
++	github.com/pkg/errors v0.9.1 // indirect
+diff --git a/go.sum b/go.sum
+index 6e7059a..151ee56 100644
+--- a/go.sum
++++ b/go.sum
+@@ -2,0 +3,29 @@ github.com/bluekeyes/go-gitdiff v0.6.0/go.mod h1:QpfYYO1E0fTVHVZAZKiRjtSGY9823iC
++github.com/google/go-cmp v0.4.0/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
++github.com/google/go-cmp v0.5.6 h1:BKbKCqvP6I+rmFHt06ZmyQtvB8xAkWdhFyr0ZUNZcxQ=
++github.com/google/go-cmp v0.5.6/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
++github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
++github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
++github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
++github.com/spf13/pflag v1.0.3/go.mod h1:DYY7MBk1bdzusC3SYhjObp+wFpr4gzcvqqNjLnInEg4=
++github.com/yuin/goldmark v1.4.1/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
++golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
++golang.org/x/crypto v0.0.0-20191011191535-87dc89f01550/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
++golang.org/x/mod v0.5.1/go.mod h1:5OXOZSfqPIIbmVBIIKWRFfZjPR0E5r58TLhUjH0a2Ro=
++golang.org/x/net v0.0.0-20190311183353-d8887717615a/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
++golang.org/x/net v0.0.0-20190404232315-eb5bcb51f2a3/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
++golang.org/x/net v0.0.0-20190620200207-3b0461eec859/go.mod h1:z5CRVTTTmAJ677TzLLGU+0bjPO0LkuOLi4/5GtJWs/s=
++golang.org/x/net v0.0.0-20211015210444-4f30a5c0130f/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
++golang.org/x/sync v0.0.0-20190423024810-112230192c58/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
++golang.org/x/sync v0.0.0-20210220032951-036812b2e83c/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
++golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
++golang.org/x/sys v0.0.0-20190412213103-97732733099d/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.0.0-20210423082822-04245dca01da/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.0.0-20211019181941-9d821ace8654/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
++golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
++golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
++golang.org/x/text v0.3.6/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
++golang.org/x/text v0.3.7/go.mod h1:u+2+/6zg+i71rQMx5EYifcz6MCKuco9NR6JIITiCfzQ=
++golang.org/x/tools v0.0.0-20180917221912-90fa682c2a6e/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
++golang.org/x/tools v0.0.0-20190624222133-a101b041ded4/go.mod h1:/rFqwRUd4F7ZHNgwSSTFct+R/Kf4OFW1sUzUTQQTgfc=
++golang.org/x/tools v0.0.0-20191119224855-298f0cb1881e/go.mod h1:b+2E5dAYhXwXZwtnZ6UAqBI28+e2cm9otk0dWdXHAEo=
+@@ -4,0 +34,7 @@ golang.org/x/tools v0.1.8/go.mod h1:nABZi5QlRsZVlzPpHl034qft6wpY4eDcsTt5AaioBiU=
++golang.org/x/xerrors v0.0.0-20190717185122-a985d3407aa7/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
++golang.org/x/xerrors v0.0.0-20191011141410-1b5146add898/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
++golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
++golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 h1:go1bK/D/BFZV2I8cIQd1NKEZ+0owSTG1fDTci4IqFcE=
++golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
++gotest.tools/v3 v3.0.3 h1:4AuOwCGf4lLR9u3YOe2awrHygurzhO/HeQ6laiA6Sx0=
++gotest.tools/v3 v3.0.3/go.mod h1:Z7Lb0S5l+klDB31fvDQX8ss/FlKDxtlFlw3Oa8Ymbl8=
+diff --git a/testdata/scenarios/new_file/golden.json b/testdata/scenarios/new_file/golden.json
+new file mode 100644
+index 0000000..f8d4da9
+--- /dev/null
++++ b/testdata/scenarios/new_file/golden.json
+@@ -0,0 +1,8 @@
++{
++  "NumStmt": 8,
++  "CoverCount": 6,
++  "Coverage": 75,
++  "PatchNumStmt": 8,
++  "PatchCoverCount": 6,
++  "PatchCoverage": 75
++}
+\ No newline at end of file
+diff --git a/testdata/scenarios/single_edit/coverage.out b/testdata/scenarios/single_edit/coverage.out
+new file mode 100644
+index 0000000..8606578
+--- /dev/null
++++ b/testdata/scenarios/single_edit/coverage.out
+@@ -0,0 +1,27 @@
++mode: set
++github.com/seriousben/go-patch-cover/cover.go:11.72,13.16 2 1
++github.com/seriousben/go-patch-cover/cover.go:19.2,20.16 2 1
++github.com/seriousben/go-patch-cover/cover.go:24.2,25.16 2 1
++github.com/seriousben/go-patch-cover/cover.go:29.2,29.41 1 1
++github.com/seriousben/go-patch-cover/cover.go:13.16,15.3 1 0
++github.com/seriousben/go-patch-cover/cover.go:20.16,22.3 1 0
++github.com/seriousben/go-patch-cover/cover.go:25.16,27.3 1 0
++github.com/seriousben/go-patch-cover/cover.go:41.103,44.34 2 1
++github.com/seriousben/go-patch-cover/cover.go:77.2,77.34 1 1
++github.com/seriousben/go-patch-cover/cover.go:86.2,86.23 1 1
++github.com/seriousben/go-patch-cover/cover.go:89.2,89.28 1 1
++github.com/seriousben/go-patch-cover/cover.go:93.2,93.18 1 1
++github.com/seriousben/go-patch-cover/cover.go:44.34,45.31 1 1
++github.com/seriousben/go-patch-cover/cover.go:45.31,47.49 1 1
++github.com/seriousben/go-patch-cover/cover.go:52.3,53.31 1 1
++github.com/seriousben/go-patch-cover/cover.go:47.49,49.13 1 1
++github.com/seriousben/go-patch-cover/cover.go:53.31,56.39 2 1
++github.com/seriousben/go-patch-cover/cover.go:56.39,57.35 1 1
++github.com/seriousben/go-patch-cover/cover.go:57.35,58.35 1 1
++github.com/seriousben/go-patch-cover/cover.go:61.7,65.57 2 1
++github.com/seriousben/go-patch-cover/cover.go:58.35,59.16 1 0
++github.com/seriousben/go-patch-cover/cover.go:65.57,68.26 2 1
++github.com/seriousben/go-patch-cover/cover.go:77.34,78.30 1 1
++github.com/seriousben/go-patch-cover/cover.go:78.30,81.4 2 1
++github.com/seriousben/go-patch-cover/cover.go:86.23,88.3 1 1
++github.com/seriousben/go-patch-cover/cover.go:89.28,91.3 1 1
+diff --git a/testdata/scenarios/single_edit/diff.diff b/testdata/scenarios/single_edit/diff.diff
+new file mode 100644
+index 0000000..9d53a16
+--- /dev/null
++++ b/testdata/scenarios/single_edit/diff.diff
+@@ -0,0 +1,214 @@
++diff --git a/cmd/main.go b/cmd/main.go
++new file mode 100644
++index 0000000..e6deb13
++--- /dev/null
+++++ b/cmd/main.go
++@@ -0,0 +1,18 @@
+++package main
+++
+++import (
+++	"fmt"
+++	"log"
+++
+++	patchcover "github.com/seriousben/go-patch-cover"
+++)
+++
+++func main() {
+++	coverage, err := patchcover.ProcessFiles("testdata/scenarios/new_file/diff.diff", "testdata/scenarios/new_file/coverage.out")
+++	if err != nil {
+++		log.Fatal(err)
+++	}
+++
+++	fmt.Printf("coverage: %.1f%% of statements\n", coverage.Coverage)
+++	fmt.Printf("patch coverage: %.1f%% of changed statements\n", coverage.PatchCoverage)
+++}
++diff --git a/main.go b/cover.go
++similarity index 55%
++rename from main.go
++rename to cover.go
++index 9a53c79..c07aadb 100644
++--- a/main.go
+++++ b/cover.go
++@@ -1 +1 @@
++-package main
+++package patchcover
++@@ -4,2 +3,0 @@ import (
++-	"fmt"
++-	"log"
++@@ -13,2 +11,2 @@ import (
++-func main() {
++-	patch, err := os.Open("testdata/scenarios/new_file/diff.diff")
+++func ProcessFiles(diffFile, coverageFile string) (CoverageData, error) {
+++	patch, err := os.Open(diffFile)
++@@ -16 +14 @@ func main() {
++-		log.Fatal(err)
+++		return CoverageData{}, err
++@@ -23 +21 @@ func main() {
++-		log.Fatal(err)
+++		return CoverageData{}, err
++@@ -26 +24 @@ func main() {
++-	profiles, err := cover.ParseProfiles("testdata/scenarios/new_file/coverage.out")
+++	profiles, err := cover.ParseProfiles(coverageFile)
++@@ -28 +26 @@ func main() {
++-		log.Fatal(err)
+++		return CoverageData{}, err
++@@ -31,6 +29,11 @@ func main() {
++-	var (
++-		numStmt         int
++-		coverCount      int
++-		patchNumStmt    int
++-		patchCoverCount int
++-	)
+++	return computeCoverage(files, profiles)
+++}
+++
+++type CoverageData struct {
+++	NumStmt         int
+++	CoverCount      int
+++	Coverage        float64
+++	PatchNumStmt    int
+++	PatchCoverCount int
+++	PatchCoverage   float64
+++}
++@@ -37,0 +41,2 @@ func main() {
+++func computeCoverage(diffFiles []*gitdiff.File, coverProfiles []*cover.Profile) (CoverageData, error) {
+++	var data CoverageData
++@@ -39,2 +44,2 @@ func main() {
++-	for _, p := range profiles {
++-		for _, f := range files {
+++	for _, p := range coverProfiles {
+++		for _, f := range diffFiles {
++@@ -50 +55 @@ func main() {
++-				patchNumStmt += b.NumStmt
+++				data.PatchNumStmt += b.NumStmt
++@@ -62 +67 @@ func main() {
++-							patchCoverCount += b.NumStmt * b.Count
+++							data.PatchCoverCount += b.NumStmt * b.Count
++@@ -72 +77 @@ func main() {
++-	for _, p := range profiles {
+++	for _, p := range coverProfiles {
++@@ -74,2 +79,2 @@ func main() {
++-			numStmt += b.NumStmt
++-			coverCount += b.NumStmt * b.Count
+++			data.NumStmt += b.NumStmt
+++			data.CoverCount += b.NumStmt * b.Count
++@@ -81,4 +86,2 @@ func main() {
++-	if numStmt != 0 {
++-		fmt.Printf("coverage: %.1f%% of statements\n", float64(coverCount)/float64(numStmt)*100)
++-	} else {
++-		fmt.Printf("coverage: %d%% of statements\n", 0)
+++	if data.NumStmt != 0 {
+++		data.Coverage = float64(data.CoverCount) / float64(data.NumStmt) * 100
++@@ -86,4 +89,2 @@ func main() {
++-	if patchNumStmt != 0 {
++-		fmt.Printf("patch coverage: %.1f%% of changed statements\n", float64(patchCoverCount)/float64(patchNumStmt)*100)
++-	} else {
++-		fmt.Printf("patch coverage: %d%% of changed statements\n", 0)
+++	if data.PatchNumStmt != 0 {
+++		data.PatchCoverage = float64(data.PatchCoverCount) / float64(data.PatchNumStmt) * 100
++@@ -90,0 +92,2 @@ func main() {
+++
+++	return data, nil
++diff --git a/cover_test.go b/cover_test.go
++new file mode 100644
++index 0000000..b4458f5
++--- /dev/null
+++++ b/cover_test.go
++@@ -0,0 +1,35 @@
+++package patchcover
+++
+++import (
+++	"testing"
+++
+++	"github.com/stretchr/testify/require"
+++)
+++
+++func TestProcessFiles(t *testing.T) {
+++	tcs := map[string]struct {
+++		diffFile     string
+++		coverageFile string
+++		expected     CoverageData
+++	}{
+++		"new_files": {
+++			diffFile:     "testdata/scenarios/new_file/diff.diff",
+++			coverageFile: "testdata/scenarios/new_file/coverage.out",
+++			expected: CoverageData{
+++				NumStmt:         8,
+++				CoverCount:      6,
+++				Coverage:        75.0,
+++				PatchNumStmt:    8,
+++				PatchCoverCount: 6,
+++				PatchCoverage:   75.0,
+++			},
+++		},
+++	}
+++	for tn, tc := range tcs {
+++		t.Run(tn, func(t *testing.T) {
+++			cov, err := ProcessFiles(tc.diffFile, tc.coverageFile)
+++			require.NoError(t, err)
+++			require.Equal(t, tc.expected, cov)
+++		})
+++	}
+++}
++diff --git a/go.mod b/go.mod
++index fb77b18..6914ea7 100644
++--- a/go.mod
+++++ b/go.mod
++@@ -6,0 +7,3 @@ require (
+++	github.com/davecgh/go-spew v1.1.0 // indirect
+++	github.com/pmezard/go-difflib v1.0.0 // indirect
+++	github.com/stretchr/testify v1.7.0 // indirect
++@@ -7,0 +11 @@ require (
+++	gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c // indirect
++diff --git a/go.sum b/go.sum
++index 6e7059a..74fa7a9 100644
++--- a/go.sum
+++++ b/go.sum
++@@ -2,0 +3,7 @@ github.com/bluekeyes/go-gitdiff v0.6.0/go.mod h1:QpfYYO1E0fTVHVZAZKiRjtSGY9823iC
+++github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
+++github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+++github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+++github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+++github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
+++github.com/stretchr/testify v1.7.0 h1:nwc3DEeHmmLAfoZucVR881uASk0Mfjw8xYJ99tb5CcY=
+++github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
++@@ -4,0 +12,3 @@ golang.org/x/tools v0.1.8/go.mod h1:nABZi5QlRsZVlzPpHl034qft6wpY4eDcsTt5AaioBiU=
+++gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+++gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c h1:dUUwHk2QECo/6vqA44rthZ8ie2QXMNeKRTHCNY2nXvo=
+++gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
++diff --git a/testdata/scenarios/single_edit/coverage.out b/testdata/scenarios/single_edit/coverage.out
++new file mode 100644
++index 0000000..8606578
++--- /dev/null
+++++ b/testdata/scenarios/single_edit/coverage.out
++@@ -0,0 +1,27 @@
+++mode: set
+++github.com/seriousben/go-patch-cover/cover.go:11.72,13.16 2 1
+++github.com/seriousben/go-patch-cover/cover.go:19.2,20.16 2 1
+++github.com/seriousben/go-patch-cover/cover.go:24.2,25.16 2 1
+++github.com/seriousben/go-patch-cover/cover.go:29.2,29.41 1 1
+++github.com/seriousben/go-patch-cover/cover.go:13.16,15.3 1 0
+++github.com/seriousben/go-patch-cover/cover.go:20.16,22.3 1 0
+++github.com/seriousben/go-patch-cover/cover.go:25.16,27.3 1 0
+++github.com/seriousben/go-patch-cover/cover.go:41.103,44.34 2 1
+++github.com/seriousben/go-patch-cover/cover.go:77.2,77.34 1 1
+++github.com/seriousben/go-patch-cover/cover.go:86.2,86.23 1 1
+++github.com/seriousben/go-patch-cover/cover.go:89.2,89.28 1 1
+++github.com/seriousben/go-patch-cover/cover.go:93.2,93.18 1 1
+++github.com/seriousben/go-patch-cover/cover.go:44.34,45.31 1 1
+++github.com/seriousben/go-patch-cover/cover.go:45.31,47.49 1 1
+++github.com/seriousben/go-patch-cover/cover.go:52.3,53.31 1 1
+++github.com/seriousben/go-patch-cover/cover.go:47.49,49.13 1 1
+++github.com/seriousben/go-patch-cover/cover.go:53.31,56.39 2 1
+++github.com/seriousben/go-patch-cover/cover.go:56.39,57.35 1 1
+++github.com/seriousben/go-patch-cover/cover.go:57.35,58.35 1 1
+++github.com/seriousben/go-patch-cover/cover.go:61.7,65.57 2 1
+++github.com/seriousben/go-patch-cover/cover.go:58.35,59.16 1 0
+++github.com/seriousben/go-patch-cover/cover.go:65.57,68.26 2 1
+++github.com/seriousben/go-patch-cover/cover.go:77.34,78.30 1 1
+++github.com/seriousben/go-patch-cover/cover.go:78.30,81.4 2 1
+++github.com/seriousben/go-patch-cover/cover.go:86.23,88.3 1 1
+++github.com/seriousben/go-patch-cover/cover.go:89.28,91.3 1 1
++diff --git a/testdata/scenarios/single_edit/diff.diff b/testdata/scenarios/single_edit/diff.diff
++new file mode 100644
++index 0000000..f7f2c24
+diff --git a/testdata/scenarios/single_edit/golden.json b/testdata/scenarios/single_edit/golden.json
+new file mode 100644
+index 0000000..5fc34a2
+--- /dev/null
++++ b/testdata/scenarios/single_edit/golden.json
+@@ -0,0 +1,8 @@
++{
++  "NumStmt": 34,
++  "CoverCount": 30,
++  "Coverage": 88.23529411764706,
++  "PatchNumStmt": 34,
++  "PatchCoverCount": 19,
++  "PatchCoverage": 55.88235294117647
++}

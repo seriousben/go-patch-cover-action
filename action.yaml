@@ -68,11 +68,38 @@ runs:
         previous_coverage_filename : ${{ inputs.previous_coverage_filename }}
     - if: github.event_name == 'pull_request'
       run: |
+        patch_tmpl=$(cat <<EOF
+        <!-- go-patch-cover/report -->
+        <img src="https://badges.seriousben.com/badge?label=Patch%20Coverage&description={{printf "%.1f" .PatchCoverage}}%25" />
+
+        <table>
+        {{- if .HasPrevCoverage -}}
+        <tr>
+          <td>Previous Coverage
+          <td>{{printf "%.1f" .PrevCoverage}}% of statements
+          <td><img src="https://badges.seriousben.com/progress?percent={{.PrevCoverage}}">
+        {{ end -}}
+        <tr>
+          <td>New Coverage
+          <td>{{printf "%.1f" .Coverage}}% of statements
+          <td><img src="https://badges.seriousben.com/progress?percent={{.Coverage}}">
+        <tr>
+          <td>Patch Coverage
+          <td>{{printf "%.1f" .PatchCoverage}}% of changed statements ({{ .PatchCoverCount }}/{{ .PatchNumStmt }})
+          <td><img src="https://badges.seriousben.com/progress?percent={{.PatchCoverage}}">
+        </table>
+
+        ---
+
+        <sup>Coverage provided by https://github.com/seriousben/go-patch-cover-action</sup>
+        EOF
+        )
+
         go install "github.com/seriousben/go-patch-cover/cmd/go-patch-cover@${version}"
         if [ -f "${previous_coverage_filename}" ]; then
-          out="$($(go env GOPATH)/bin/go-patch-cover ${coverage_filename} ${diff_filename} ${previous_coverage_filename})"
+          out="$($(go env GOPATH)/bin/go-patch-cover -tmpl="${patch_tmpl}" ${coverage_filename} ${diff_filename} ${previous_coverage_filename})"
         else
-          out="$($(go env GOPATH)/bin/go-patch-cover ${coverage_filename} ${diff_filename})"
+          out="$($(go env GOPATH)/bin/go-patch-cover -tmpl="${patch_tmpl}" ${coverage_filename} ${diff_filename})"
         fi
 
         # Creating here doc to keep newline intact.
