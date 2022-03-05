@@ -149,7 +149,7 @@ runs:
           done
         else
           gh api graphql -X POST -F subjectId=$PULL_REQUEST_NODE_ID -F body="$comment_body" -f query='
-            mutation AddComment($subjectId: String!, $body: String!) {
+            mutation AddComment($subjectId: ID!, $body: String!) {
               addComment(input: {subjectId: $subjectId, body: $body}) {
                 clientMutationId
               }

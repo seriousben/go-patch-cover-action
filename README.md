@@ -36,8 +36,6 @@ jobs:
         go-version: "*"
     - run: "go test -coverprofile=coverage.out -covermode=count ./..."
     - uses: seriousben/go-patch-cover-action@v1
-      with:
-        version: main
 ```
 
 Please see [GitHub's documentation on Actions](https://docs.github.com/en/actions) for extensive
