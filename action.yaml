@@ -10,7 +10,7 @@ inputs:
     description: |
       The version of go-patch-cover to use.
     required: true
-    default: "0.2.0"
+    default: "v0.2.0"
   coverage_filename:
     description: |
       go coverage file for the code after change.
